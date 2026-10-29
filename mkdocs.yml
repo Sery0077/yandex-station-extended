@@ -126,6 +126,7 @@ plugins:
         platform/quasar-api.md: internals/network.md
         platform/gotchas.md: internals/gotchas.md
         platform/toolchain.md: internals/toolchain.md
+        recipes/yam.md: recipes/packagemanagers.md
 
 # страница редактора не в меню
 not_in_nav: |
