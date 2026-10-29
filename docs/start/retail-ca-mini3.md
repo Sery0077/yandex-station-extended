@@ -391,17 +391,43 @@ cp /etc/init.d/S99zdropbear /data/opt/S99zdropbear
 
 ```sh
 #!/bin/sh
+# sh restore-system.sh check  — только проверить копии, ничего не менять
+set -u
+CA=/data/opt/ca/ca-certificates.crt
+S99=/data/opt/S99zdropbear
+NOUPD=/data/opt/yandex-noupdate.sh
+
+for f in "$CA" "$S99" "$NOUPD" /data/opt/bin/dropbear /data/opt/etc/dropbear/hk_ed25519; do
+  [ -s "$f" ] && echo "  ok   $f" || { echo "  НЕТ  $f"; miss=1; }
+done
+[ "${miss:-0}" = 0 ] || { echo "восстанавливать нечем"; exit 1; }
+[ "${1:-}" = check ] && exit 0
+
 mount -o remount,rw / || exit 1
-cp /data/opt/ca/ca-certificates.crt /system/vendor/quasar/certs/ca-certificates.crt
+# сток после перепрошивки — в .orig, если прежний пропал вместе с system
+[ -s /system/vendor/quasar/certs/ca-certificates.crt.orig ] ||
+  cp -p /system/vendor/quasar/certs/ca-certificates.crt \
+        /system/vendor/quasar/certs/ca-certificates.crt.orig
+cp "$CA" /system/vendor/quasar/certs/ca-certificates.crt
 chmod 0644 /system/vendor/quasar/certs/ca-certificates.crt
-cp /data/opt/S99zdropbear /etc/init.d/S99zdropbear
+cp "$S99" /etc/init.d/S99zdropbear
 chmod +x /etc/init.d/S99zdropbear
 sync
 mount -o remount,ro /
-sh /data/opt/yandex-noupdate.sh
-/etc/init.d/S99zdropbear start
+sh "$NOUPD"
+/etc/init.d/S99zdropbear start >/dev/null 2>&1
+sleep 1
 pidof dropbear
 ```
+
+Проверки стоят до `mount -o remount,rw /`: если копий не окажется, корень не останется
+смонтированным на запись. Перенаправление при запуске dropbear обязательно — без него демон
+наследует stdout сессии и `adb shell` повиснет.
+
+Запускать после перепрошивки нужно **через ADB**: автозапуск SSH лежит в `system`, то есть
+к этому моменту его ещё нет. Скрипт идемпотентен, в `S99zdropbear` ветка `start` выходит по
+`pidof`, так что повторный запуск на живой системе ничего не ломает — на нём страховку и
+стоит проверить заранее.
 
 ## Восстановление исходного CA { #restore }
 
