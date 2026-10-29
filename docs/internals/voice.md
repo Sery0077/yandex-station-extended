@@ -74,6 +74,67 @@ flowchart TD
 
 Подтверждено логом: `command_spotter_capability.cpp: Command phrase spotted: ^ дизлайк`.
 
+### Где лежат модели { #spotter-models }
+
+Пути задаются в `quasar.cfg`, и моделям из `/data` отдаётся приоритет над прошивочными:
+
+```text
+"customModelsConfigPath" : "${DATA}/data/spotter.json",
+"customModelsPath"       : "${DATA}/data/spotter_model",
+"defaultModelsPath"      : "${QUASAR}/spotter_models",
+"spotterChannelName"     : "vqe_0",
+"spotterModelPath"       : "${QUASAR}/spotter_models/activation/alisa"
+```
+
+Прошивочный набор (снято с Лайт 2 / Plum, `0.369.1.50`): `activation/{alisa,yandex,yasmina}`,
+`command`, `counteractivation`, `intonationInterruption`, `spotterRecognizer`, `vad`.
+Ссылки на зипы — в разделе `spotter` того же `quasar.cfg`; для Plum активационная модель своя,
+`ru-RU-plum-alisa-02Jun25-i8-new-flags`.
+
+Скачанное с CDN перечислено в манифесте `/data/quasar/data/spotter.json`: по объекту на модель
+с полями `type`, `path`, `url` и `crc`, каталоги названы UUID. Это `/data`, поэтому правки не
+требуют `remount,rw` и переживают перепрошивку `system` — но манифест обновляется из облака,
+и ручные изменения может перезаписать синхронизация.
+
+### Пороги и состав команд { #spotter-flags }
+
+Модель — каталог с `acoustic_model.nnet`, `words.txt` и текстовым `flags.txt`. Последний
+правится без пересборки. У командной модели:
+
+```text
+spotter-type chen14
+feat-frontend log-mel-fbank
+mel-num-bins 40
+sample-rate 16000
+commands 1:2:3:4:5:6:7:8:9:10:11:12:13:14:15:16:17:18,20:18,21:19,20:19,21:23,25:24,25:26:27
+thresholds 0.705:0.284:0.0137:…:0.267:0.724:0.126:0.936:0.968:0.961:0.998
+subthresholds 0.705:0.284:0.0137:…
+```
+
+`words.txt` задаёт индексы слов (`включи 18`, `выключи 19`, `свет 20`, `телевизор 21`), а
+`commands` — фразы, в том числе составные: `18,20` — «включи свет», `18,21` — «включи
+телевизор», `19,20`, `19,21`, `23,25`/`24,25` — блютуз. Порог в `thresholds` стоит по позиции
+фразы в `commands`.
+
+Отсюда способы повлиять на локальный слой:
+
+- поднять порог к `0.999` или убрать комбинацию из `commands` — фраза перестаёт перехватываться
+  локально и уходит в облако (нужно, когда её должен обработать свой прокси, см.
+  [Quasar Bridge](../recipes/llm.md#quasar-bridge));
+- убрать объект `"type":"command"` из `spotter.json` — командный спотер не поднимется вовсе;
+- сменить ключевое слово, переставив `spotterModelPath` на `activation/yandex` или
+  `activation/yasmina`.
+
+!!! warning "Чего сделать не получится"
+    **Своё ключевое слово не обучить.** Формат закрытый: движок `nnet`, `spotter-type chen14`,
+    признаки `log-mel-fbank`, матрица `lda.mat`, веса квантованы (`i8`, `q16`); публичных
+    инструментов обучения под него нет, только готовые зипы с CDN Яндекса.
+    **Срабатывание перепроверяет сервер** (`SpotterValidation`): в
+    `onlineSpotterValidationDisabledTypes` отключены лишь `noise-detection` и `vad`, поэтому
+    снижение порога активации облако может отклонить.
+    Правка файлов внутри скачанной модели ломает `crc` из манифеста — вероятна перекачка;
+    надёжнее подменять каталог целиком или править копию в `${QUASAR}`.
+
 ## 4. Активация → поток в облако (SpeechKit)
 
 - На срабатывание: звуковой сигнал earcon (`playStartVoiceInputEarcon`,
@@ -148,6 +209,10 @@ ASR: `shortRecognizerModel: quasar-general`, промежуточные гипо
   Параметр `uniProxyUrl` можно увести на свой сервер, в том числе по `ws://` без TLS.
 - **Рабочий пример** — [quasard](../recipes/llm.md#quasard): свой uniproxy (JSON и protobuf
   `AAPI`), ASR, LLM и TTS вместо облака.
+- **Часть фраз до своего сервера не дойдёт**: командный спотер обрабатывает «включи/выключи»,
+  «свет», «телевизор», «стоп» и прочие ~25 команд на устройстве, без ключевого слова и без
+  отправки в облако. Для своих команд либо берите формулировки, которых нет в `words.txt`, либо
+  правьте пороги — см. [Пороги и состав команд](#spotter-flags).
 
 !!! warning "Колонка может отправлять фрагменты звука в облако"
     Колонка постоянно держит соединение с облаком, а для «beta»-групп может отправлять случайные
